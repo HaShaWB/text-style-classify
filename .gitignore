@@ -166,3 +166,11 @@ basic/models--MLP-KTLim--llama-3-Korean-Bllossom-8B/
 *.pth
 
 dataset/한국어-다국어 번역 말뭉치/raw/
+
+*.pkl
+
+*.json
+
+*.csv
+
+*.pt
