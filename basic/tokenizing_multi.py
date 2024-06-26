@@ -4,6 +4,18 @@ from concurrent.futures import ProcessPoolExecutor
 import tiktoken
 import multiprocessing
 
+
+
+
+FILE_NUM = 20
+
+SPLITS = 32
+
+BATCH_SIZE = 32
+
+
+
+
 # 사용할 인코딩 선택
 encoding_name = "cl100k_base"  # "p50k_base", "r50k_base", "gpt2" 등으로 변경 가능
 
@@ -17,9 +29,7 @@ def tiktoken_tokenizer(sentence):
     
     # tiktoken을 사용하여 문장을 토큰화하고 ID로 변환
     token_ids = tokenizer.encode(sentence)
-    # 토큰 ID를 다시 토큰으로 변환
-    token_list = [tokenizer.decode([token_id])[0] for token_id in token_ids]
-    return pd.Series([token_ids, token_list])
+    return token_ids
 
 def split_dataframe(df, n):
     split_dfs = []
@@ -36,9 +46,9 @@ def split_dataframe(df, n):
 def process_dataframe(args):
     i, file, base_dir, total_steps, progress_queue = args
     df = pd.read_pickle(file)
-    df[["tiktoken_encodes", "tiktoken_tokens"]] = df["sentence"].apply(tiktoken_tokenizer)
+    df["tiktoken_encodes"] = df["sentence"].apply(tiktoken_tokenizer)
     # 처리된 결과를 파일로 저장
-    temp_file = os.path.join(base_dir, f"datasets/temp_written_{i}.pkl")
+    temp_file = os.path.join(base_dir, f"temps/temp_written_{i}.pkl")
     df.to_pickle(temp_file)
     
     progress_queue.put(1)
@@ -56,53 +66,68 @@ def update_progress(progress_queue, current_step, total_steps):
             print_progress(current_step.value, total_steps)
 
 if __name__ == "__main__":
-    for file_num in range(2, 10):
+    base_dir = os.getcwd()
+
+    print("hello world")
+    
+    """    dfs = split_dataframe(pd.read_csv(os.path.join(base_dir, f"datasets/written.csv")), FILE_NUM)
+
+        for i in range(len(dfs)):
+            dfs[i].to_csv(os.path.join(base_dir, f"datasets/written_{i}.csv"), index=False)
+            dfs[i] = None
+            gc.collect()
+        
+        dfs = None
+        gc.collect()"""
+
+    print("Processing started!")
+
+    for file_index in range(FILE_NUM):
         gc.collect()
         
-        print(f"Starting the process: written_{file_num}")
+        print(f"Starting the process: written_{file_index}")
 
-        base_dir = os.getcwd()
 
-        df2 = pd.read_csv(os.path.join(base_dir, f"datasets/written_{file_num}.csv"))
+        df2 = pd.read_csv(os.path.join(base_dir, f"datasets/written_{file_index}.csv"))
 
-        splits = 128
-        batch_size = 32
+        
+
 
         # 데이터프레임을 128등분하여 파일로 저장
-        split_df2 = split_dataframe(df2, splits)
+        split_df2 = split_dataframe(df2, SPLITS)
 
         df2 = None
         gc.collect()
 
-        total_steps = splits  # 총 스텝 수는 총 파일 수 + 총 배치 수
+        total_steps = SPLITS  # 총 스텝 수는 총 파일 수 + 총 배치 수
         current_step = multiprocessing.Value('i', 0)  # 공유 변수로 사용
         lock = multiprocessing.Lock()
 
         for i, df in enumerate(split_df2):
-            temp_file = os.path.join(base_dir, f"datasets/temp_split_{file_num}_{i}.pkl")
+            temp_file = os.path.join(base_dir, f"temps/temp_split_{file_index}_{i}.pkl")
             df.to_pickle(temp_file)
 
         split_df2 = None
         gc.collect()
 
-        num_batches = splits // batch_size
+        num_batches = SPLITS // BATCH_SIZE
         final_results = []
 
         manager = multiprocessing.Manager()
         progress_queue = manager.Queue()
 
         for batch_num in range(num_batches):
-            batch_files = [os.path.join(base_dir, f"datasets/temp_split_{file_num}_{i}.pkl") for i in range(batch_num * batch_size, (batch_num + 1) * batch_size)]
+            batch_files = [os.path.join(base_dir, f"temps/temp_split_{file_index}_{i}.pkl") for i in range(batch_num * BATCH_SIZE, (batch_num + 1) * BATCH_SIZE)]
             
             # 배치를 멀티프로세서로 처리
-            with ProcessPoolExecutor(max_workers=batch_size) as executor:
+            with ProcessPoolExecutor(max_workers=BATCH_SIZE) as executor:
                 batch_results = list(executor.map(process_dataframe, [(i, file, base_dir, total_steps, progress_queue) for i, file in enumerate(batch_files)]))
             
             update_progress(progress_queue, current_step, total_steps)
             
             # 병렬 처리된 결과들을 결합하고 저장
             batch_df = pd.concat([pd.read_pickle(file) for file in batch_results])
-            batch_output_file = os.path.join(base_dir, f"datasets/batch_result_{file_num}_{batch_num}.pkl")
+            batch_output_file = os.path.join(base_dir, f"temps/batch_result_{file_index}_{batch_num}.pkl")
             batch_df.to_pickle(batch_output_file)
             
             # 임시 파일 삭제 및 메모리 해제
@@ -120,7 +145,7 @@ if __name__ == "__main__":
         # 최종 데이터프레임 결합
         final_df_list = [pd.read_pickle(file) for file in final_results]
         final_df = pd.concat(final_df_list)
-        final_df.to_pickle(os.path.join(base_dir, f"datasets/written_{file_num}.pkl"))
+        final_df.to_pickle(os.path.join(base_dir, f"datasets/written_{file_index}.pkl"))
 
         # 중간 파일 삭제 및 메모리 해제
         for file in final_results:
